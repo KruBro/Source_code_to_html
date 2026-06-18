@@ -260,6 +260,17 @@ pevent_t * pstate_idle_handler(FILE *fd, int ch)
 			break;
 
 		case '0' ... '9' : // detect numeric constant
+			if(event_data_idx)
+			{
+				//If its part of another variable name or etc...
+				pevent_data.data[event_data_idx++] = ch;
+			}
+			else
+			{
+				//Buffer is empty, this is the start of a real number
+				state = PSTATE_NUMERIC_CONSTANT;
+				pevent_data.data[event_data_idx++] = ch;
+			}
 			break;
 
 		case 'a' ... 'z' : // could be reserved key word
@@ -316,17 +327,20 @@ pevent_t * pstate_reserve_keyword_handler(FILE *fd, int ch)
 }
 pevent_t * pstate_numeric_constant_handler(FILE *fd, int ch)
 {
-	/* write a switch case here to store digits
-	 * return event data at the end of event
-	 * else return NULL
-	 */
+	//If it hits the wall that marks the end of the number 
+	if(ch == '\t' || ch == ' ' || ch == ';' || ch == '\n' || is_operator(ch) || is_symbol(ch))
+	{
+		fseek(fd, -1L, SEEK_CUR);
+		set_parser_event(PSTATE_IDLE, PEVENT_NUMERIC_CONSTANT);
+		return &pevent_data;
+	}
+
+	//If it is not the wall, Store the char in to the buffer
+	pevent_data.data[event_data_idx++] = ch;
+	return NULL;
 }
 pevent_t * pstate_string_handler(FILE *fd, int ch)
 {
-	/* write a switch case here to store string
-	 * return event data at the end of event
-	 * else return NULL
-	 */
 	switch(ch)
 	{
 		case '\\':
