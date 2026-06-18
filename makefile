@@ -22,7 +22,7 @@ $(TARGET): $(OBJ)
 
 # Build the unit test executable
 test: $(TEST_OBJ)
-	$(CC) $(CFLAGS) -o $(TEST_TEST) $(TEST_OBJ)
+	$(CC) $(CFLAGS) -o $(TEST_TARGET) $(TEST_OBJ)
 	./$(TEST_TARGET)
 
 # Generic rule to compile .c files into .o files

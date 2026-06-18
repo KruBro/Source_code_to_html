@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <string.h>
 #include "s2html_event.h"
@@ -68,6 +67,26 @@ pevent_t * pstate_sub_preprocessor_main_handler(FILE *fd, int ch);
 
 /********** Utility functions **********/
 
+/* Appends a single character to the current event's data buffer.
+ * The buffer is a fixed size array (PEVENT_DATA_SIZE), so the index
+ * is checked first and one slot is always reserved for the terminating
+ * '\0' that set_parser_event() writes later. Characters beyond the
+ * buffer capacity are simply dropped instead of overflowing memory. */
+static void store_event_char(int ch)
+{
+	if(event_data_idx < PEVENT_DATA_SIZE - 1)
+		pevent_data.data[event_data_idx++] = ch;
+}
+
+/* Appends a single character to the temporary "word" buffer used while
+ * an identifier/keyword is being collected. Same fixed-size protection
+ * as store_event_char(), applied to the smaller word[] buffer. */
+static void store_word_char(int ch)
+{
+	if(word_idx < WORD_BUFF_SIZE - 1)
+		word[word_idx++] = ch;
+}
+
 /* function to check if given word is reserved key word */
 static int is_reserved_keyword(char *word)
 {
@@ -94,7 +113,7 @@ static int is_reserved_keyword(char *word)
 /* function to check symbols */
 static int is_symbol(char c)
 {
-	int idx;
+	size_t idx; // size_t matches the unsigned type returned by sizeof()
 	for(idx = 0; idx < SIZE_OF_SYMBOLS; idx++)
 	{
 		if(symbols[idx] == c)
@@ -107,7 +126,7 @@ static int is_symbol(char c)
 /* function to check operator */
 static int is_operator(char c)
 {
-	int idx;
+	size_t idx; // size_t matches the unsigned type returned by sizeof()
 	for(idx = 0; idx < SIZE_OF_OPERATORS; idx++)
 	{
 		if(operators[idx] == c)
@@ -135,7 +154,7 @@ static void set_parser_event(pstate_e s, pevent_e e)
  */
 pevent_t *get_parser_event(FILE *fd)
 {
-	int ch, pre_ch;
+	int ch;
 	pevent_t *evptr = NULL;
 	/* Read char by char */
 	while((ch = fgetc(fd)) != EOF)
@@ -196,7 +215,9 @@ pevent_t *get_parser_event(FILE *fd)
 
 
 /********** IDLE state Handler **********
- * Idle state handler identifies
+ * Idle state handler identifies the start of every token type
+ * (comments, strings, numbers, identifiers, preprocessor lines, etc.)
+ * and switches the parser into the matching state.
  ****************************************/
 
 pevent_t * pstate_idle_handler(FILE *fd, int ch)
@@ -204,7 +225,15 @@ pevent_t * pstate_idle_handler(FILE *fd, int ch)
 	int pre_ch;
 	switch(ch)
 	{
-		case '\'' : // begining of ASCII char 
+		case '\'' : // beginning of ASCII char 
+			if (event_data_idx) // Flush the regular text first!
+			{
+				fseek(fd, -1L, SEEK_CUR);
+				set_parser_event(PSTATE_IDLE, PEVENT_REGULAR_EXP);
+				return &pevent_data;
+			}
+			state = PSTATE_ASCII_CHAR;
+			store_event_char(ch);
 			break;
 
 		case '/' :
@@ -217,14 +246,14 @@ pevent_t * pstate_idle_handler(FILE *fd, int ch)
 					set_parser_event(PSTATE_IDLE, PEVENT_REGULAR_EXP);
 					return &pevent_data;
 				}
-				else //	multi line comment begin 
+				else // multi line comment begin 
 				{
 #ifdef DEBUG	
 					printf("Multi line comment Begin : /*\n");
 #endif
 					state = PSTATE_MULTI_LINE_COMMENT;
-					pevent_data.data[event_data_idx++] = pre_ch;
-					pevent_data.data[event_data_idx++] = ch;
+					store_event_char(pre_ch);
+					store_event_char(ch);
 				}
 			}
 			else if(ch == '/') // single line comment
@@ -235,60 +264,87 @@ pevent_t * pstate_idle_handler(FILE *fd, int ch)
 					set_parser_event(PSTATE_IDLE, PEVENT_REGULAR_EXP);
 					return &pevent_data;
 				}
-				else //	single line comment begin
+				else // single line comment begin
 				{
 #ifdef DEBUG	
 					printf("Single line comment Begin : //\n");
 #endif
 					state = PSTATE_SINGLE_LINE_COMMENT;
-					pevent_data.data[event_data_idx++] = pre_ch;
-					pevent_data.data[event_data_idx++] = ch;
+					store_event_char(pre_ch);
+					store_event_char(ch);
 				}
 			}
 			else // it is regular exp
 			{
-				pevent_data.data[event_data_idx++] = pre_ch;
-				pevent_data.data[event_data_idx++] = ch;
+				store_event_char(pre_ch);
+				store_event_char(ch);
 			}
 			break;
-		case '#' :
 
+		case '#' :
+			if (event_data_idx) // Flush the regular text first!
+			{
+				fseek(fd, -1L, SEEK_CUR);
+				set_parser_event(PSTATE_IDLE, PEVENT_REGULAR_EXP);
+				return &pevent_data;
+			}
+			state = PSTATE_PREPROCESSOR_DIRECTIVE;
+			store_event_char(ch);
 			break;
+
 		case '\"' :
+			if (event_data_idx) // Flush the regular text first!
+			{
+				fseek(fd, -1L, SEEK_CUR);
+				set_parser_event(PSTATE_IDLE, PEVENT_REGULAR_EXP);
+				return &pevent_data;
+			}
 			state = PSTATE_STRING;
-			pevent_data.data[event_data_idx++] = ch;
+			store_event_char(ch);
 			break;
 
 		case '0' ... '9' : // detect numeric constant
 			if(event_data_idx)
 			{
-				//If its part of another variable name or etc...
-				pevent_data.data[event_data_idx++] = ch;
+				// If it's part of another variable name or etc...
+				store_event_char(ch);
 			}
 			else
 			{
-				//Buffer is empty, this is the start of a real number
+				// Buffer is empty, this is the start of a real number
 				state = PSTATE_NUMERIC_CONSTANT;
-				pevent_data.data[event_data_idx++] = ch;
+				store_event_char(ch);
 			}
 			break;
 
 		case 'a' ... 'z' : // could be reserved key word
 		case 'A' ... 'Z' :
 		case '_':
+			if (event_data_idx) // Flush the regular text first!
+			{
+				fseek(fd, -1L, SEEK_CUR);
+				set_parser_event(PSTATE_IDLE, PEVENT_REGULAR_EXP);
+				return &pevent_data;
+			}
 			state = PSTATE_RESERVE_KEYWORD;
-			word[word_idx++] = ch;
+			store_word_char(ch);
 			break;
+
 		default : // Assuming common text starts by default.
-			pevent_data.data[event_data_idx++] = ch;
+			store_event_char(ch);
 			break;
 	}
 
 	return NULL;
 }
+
+/* Preprocessor lines (#include, #define, etc.) can themselves contain
+ * sub-tokens. Right now only the "main" sub-state is reachable; the
+ * keyword/ascii-char sub-states are reserved for future use so that
+ * preprocessor lines can highlight nested tokens the same way regular
+ * code does. */
 pevent_t * pstate_preprocessor_directive_handler(FILE *fd, int ch)
 {
-	int tch;
 	switch(state_sub)
 	{
 		case PSTATE_SUB_PREPROCESSOR_MAIN :
@@ -306,28 +362,72 @@ pevent_t * pstate_preprocessor_directive_handler(FILE *fd, int ch)
 }
 pevent_t * pstate_sub_preprocessor_main_handler(FILE *fd, int ch)
 {
-	/* write a switch case here to detect several events here
-	 * This state is similar to Idle state with slight difference
-	 * in state transition.
-	 * return event data at the end of event
-	 * else return NULL
-	 */
+	if(ch == '\n')
+	{
+		fseek(fd, -1L, SEEK_CUR);
+		set_parser_event(PSTATE_IDLE, PEVENT_PREPROCESSOR_DIRECTIVE);
+		return &pevent_data;
+	}
+	else if(ch == '<')
+	{
+		set_parser_event(PSTATE_HEADER_FILE, PEVENT_PREPROCESSOR_DIRECTIVE);
+		return &pevent_data;
+	}
+	else if(ch == '"')
+	{
+		fseek(fd, -1L, SEEK_CUR);
+		set_parser_event(PSTATE_HEADER_FILE, PEVENT_PREPROCESSOR_DIRECTIVE);
+		return &pevent_data;
+	}
+	else
+	{
+		store_event_char(ch);
+		return NULL;
+	}
 }
 
+/* Collects the file name that appears between < > or " " in an #include
+ * line and tags it as a standard or user header so the HTML output can
+ * style them differently. */
 pevent_t * pstate_header_file_handler(FILE *fd, int ch)
 {
-	/* write a switch case here to store header file name
-	 * return event data at the end of event
-	 * else return NULL
-	 */
+	(void)fd; // fd is part of the common handler signature but not needed here
+
+	if(ch == '>')
+	{
+		pevent_data.property = STD_HEADER_FILE;
+		set_parser_event(PSTATE_IDLE, PEVENT_HEADER_FILE);
+		return &pevent_data;
+	}
+	else if(ch == '"')
+	{
+		store_event_char(ch);
+
+		if(event_data_idx > 1)
+		{
+			pevent_data.property = USER_HEADER_FILE;
+			set_parser_event(PSTATE_IDLE, PEVENT_HEADER_FILE);
+			return &pevent_data;
+		}
+
+		return NULL;
+	}
+	else
+	{
+		store_event_char(ch);
+		return NULL;
+	}
 }
 
+/* Collects letters/digits/underscores into the word[] buffer until a
+ * non-identifier character is seen, then checks whether the finished
+ * word matches one of the reserved keyword lists. */
 pevent_t * pstate_reserve_keyword_handler(FILE *fd, int ch)
 {
     // Check for letters, numbers, and underscores
     if(isalnum(ch) || ch == '_')
     {
-        word[word_idx++] = ch;
+        store_word_char(ch);
         return NULL; // Still accumulating, keep going
     }
     else
@@ -360,6 +460,10 @@ pevent_t * pstate_reserve_keyword_handler(FILE *fd, int ch)
         return &pevent_data; // Payload is ready, send it out!
     }
 }
+
+/* Collects digits (and any trailing letters/dots that belong to the
+ * literal) until whitespace, an operator, or a symbol marks the end of
+ * the numeric constant. */
 pevent_t * pstate_numeric_constant_handler(FILE *fd, int ch)
 {
 	//If it hits the wall that marks the end of the number 
@@ -371,71 +475,79 @@ pevent_t * pstate_numeric_constant_handler(FILE *fd, int ch)
 	}
 
 	//If it is not the wall, Store the char in to the buffer
-	pevent_data.data[event_data_idx++] = ch;
+	store_event_char(ch);
 	return NULL;
 }
+
+/* Collects characters of a double-quoted string literal, honoring
+ * backslash-escaped characters (including an escaped quote) so the
+ * literal isn't ended early. */
 pevent_t * pstate_string_handler(FILE *fd, int ch)
 {
 	switch(ch)
 	{
 		case '\\':
-			pevent_data.data[event_data_idx++] = ch;
+			store_event_char(ch);
 			ch = fgetc(fd);
-			pevent_data.data[event_data_idx++] = ch;
+			if(ch != EOF) // guard against a dangling backslash at end of file
+				store_event_char(ch);
 			break;
 		case '"':
-			pevent_data.data[event_data_idx++] = ch;
+			store_event_char(ch);
 			set_parser_event(PSTATE_IDLE, PEVENT_STRING);
 			return &pevent_data;
 		default:
-			pevent_data.data[event_data_idx++] = ch;
+			store_event_char(ch);
 			break;
 	}
 
 	return NULL;
 }
 
+/* Collects characters of a // comment until the terminating newline. */
 pevent_t * pstate_single_line_comment_handler(FILE *fd, int ch)
 {
-	int pre_ch;
+	(void)fd; // fd is part of the common handler signature but not needed here
+
 	switch(ch)
 	{
 		case '\n' : /* single line comment ends here */
 #ifdef DEBUG	
 			printf("\nSingle line comment end\n");
 #endif
-			pre_ch = ch;
-			pevent_data.data[event_data_idx++] = ch;
+			store_event_char(ch);
 			set_parser_event(PSTATE_IDLE, PEVENT_SINGLE_LINE_COMMENT);
 			return &pevent_data;
 		default :  // collect single line comment chars
-			pevent_data.data[event_data_idx++] = ch;
+			store_event_char(ch);
 			break;
 	}
 
 	return NULL;
 }
+
+/* Collects characters of a /* *\/ comment, looking one character ahead
+ * whenever a '*' or '/' is seen to detect the closing "*\/" sequence
+ * (which may be split across two separate reads of the parser loop). */
 pevent_t * pstate_multi_line_comment_handler(FILE *fd, int ch)
 {
 	int pre_ch;
 	switch(ch)
 	{
 		case '*' : /* comment might end here */
-			pre_ch = ch;
-			pevent_data.data[event_data_idx++] = ch;
+			store_event_char(ch);
 			if((ch = fgetc(fd)) == '/')
 			{
 #ifdef DEBUG	
 				printf("\nMulti line comment End : */\n");
 #endif
-				pre_ch = ch;
-				pevent_data.data[event_data_idx++] = ch;
+				store_event_char(ch);
 				set_parser_event(PSTATE_IDLE, PEVENT_MULTI_LINE_COMMENT);
 				return &pevent_data;
 			}
 			else // multi line comment string still continued
 			{
-				pevent_data.data[event_data_idx++] = ch;
+				store_event_char(ch);
 			}
 			break;
 		case '/' :
@@ -444,7 +556,7 @@ pevent_t * pstate_multi_line_comment_handler(FILE *fd, int ch)
 			pre_ch = fgetc(fd); // read a char
 			fgetc(fd); // to come back to current offset
 
-			pevent_data.data[event_data_idx++] = ch;
+			store_event_char(ch);
 			if(pre_ch == '*')
 			{
 				set_parser_event(PSTATE_IDLE, PEVENT_MULTI_LINE_COMMENT);
@@ -452,17 +564,34 @@ pevent_t * pstate_multi_line_comment_handler(FILE *fd, int ch)
 			}
 			break;
 		default :  // collect multi-line comment chars
-			pevent_data.data[event_data_idx++] = ch;
+			store_event_char(ch);
 			break;
 	}
 
 	return NULL;
 }
+
+/* Collects characters of a 'x' character literal, honoring
+ * backslash-escaped characters (including an escaped quote). */
 pevent_t * pstate_ascii_char_handler(FILE *fd, int ch)
 {
-	/* write a switch case here to store ASCII chars
-	 * return event data at the end of event
-	 * else return NULL
-	 */
+	switch(ch)
+	{
+		case '\\':
+			store_event_char(ch);
+			ch = fgetc(fd);
+			if(ch != EOF) // guard against a dangling backslash at end of file
+				store_event_char(ch);
+			break;
+		case '\'':
+			store_event_char(ch);
+			set_parser_event(PSTATE_IDLE, PEVENT_ASCII_CHAR);
+			return &pevent_data;
+		default:
+			store_event_char(ch);
+			break;
+	}
+	
+	return NULL;
 }
 /**** End of file ****/

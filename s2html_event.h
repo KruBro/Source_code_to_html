@@ -1,6 +1,7 @@
 #ifndef S2HTML_EVENT_H
 #define S2HTML_EVENT_H
 
+#include <stdio.h>
 #include <ctype.h>
 
 /* event data properties */
@@ -31,7 +32,7 @@ typedef struct
 	pevent_e type; // event type
 	int property; // property associated with data
 	int length; // data length
-	char data[PEVENT_DATA_SIZE]; // cwparsed string
+	char data[PEVENT_DATA_SIZE]; // parsed string
 }pevent_t;
 
 /********** function prototypes **********/

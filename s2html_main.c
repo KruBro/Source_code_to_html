@@ -2,8 +2,6 @@
 #include <stdio.h>
 #include "s2html_event.h"
 #include "s2html_conv.h"
-#include "s2html_conv.c"
-#include "s2html_event.c"
 
 /********** main **********/
 
