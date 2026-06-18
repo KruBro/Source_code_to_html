@@ -1,6 +1,8 @@
 #ifndef S2HTML_EVENT_H
 #define S2HTML_EVENT_H
 
+#include <ctype.h>
+
 /* event data properties */
 #define USER_HEADER_FILE		1
 #define STD_HEADER_FILE			2

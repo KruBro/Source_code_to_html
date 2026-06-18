@@ -274,7 +274,10 @@ pevent_t * pstate_idle_handler(FILE *fd, int ch)
 			break;
 
 		case 'a' ... 'z' : // could be reserved key word
-
+		case 'A' ... 'Z' :
+		case '_':
+			state = PSTATE_RESERVE_KEYWORD;
+			word[word_idx++] = ch;
 			break;
 		default : // Assuming common text starts by default.
 			pevent_data.data[event_data_idx++] = ch;
@@ -318,12 +321,44 @@ pevent_t * pstate_header_file_handler(FILE *fd, int ch)
 	 * else return NULL
 	 */
 }
+
 pevent_t * pstate_reserve_keyword_handler(FILE *fd, int ch)
 {
-	/* write a switch case here to store words
-	 * return event data at the end of event
-	 * else return NULL
-	 */
+    // Check for letters, numbers, and underscores
+    if(isalnum(ch) || ch == '_')
+    {
+        word[word_idx++] = ch;
+        return NULL; // Still accumulating, keep going
+    }
+    else
+    {
+        // 1. The Rewind
+        fseek(fd, -1L, SEEK_CUR);
+        
+        // 2. String Formatting
+        word[word_idx] = '\0';
+
+        // 3. The Assessment
+        int type = is_reserved_keyword(word);
+        
+        // 4. Memory Transfer
+        event_data_idx = word_idx;
+        strcpy(pevent_data.data, word);
+        word_idx = 0; // Reset for next time
+
+        // 5. The Packaging
+        if(type != 0) 
+        {
+            pevent_data.property = type;
+            set_parser_event(PSTATE_IDLE, PEVENT_RESERVE_KEYWORD);
+        }
+        else
+        {
+            set_parser_event(PSTATE_IDLE, PEVENT_REGULAR_EXP);
+        }
+
+        return &pevent_data; // Payload is ready, send it out!
+    }
 }
 pevent_t * pstate_numeric_constant_handler(FILE *fd, int ch)
 {
